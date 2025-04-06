@@ -53,7 +53,7 @@ int select_victim_page() {
     int best_class = 4;
     int victim_ppn = -1;
 
-    for (int ppn = 0; ppn < memory_used; ppn++) {
+    for (int ppn = 0; ppn < memory_used; ++ppn) {
         int vpn = memory[ppn];
         if (vpn == -1) continue;
 
@@ -61,17 +61,19 @@ int select_victim_page() {
         int M = page_table[vpn].M;
         int class = 2 * R + M;
 
-        if (class < best_class || (class == best_class && (victim_ppn == -1 || ppn < victim_ppn))) {
+        if (class < best_class) {
             best_class = class;
             victim_ppn = ppn;
-        }
 
-        if (best_class == 0)
-            break; // can't do better than class 0
+            // Only break if this is the absolute best case
+            if (best_class == 0)
+                break;
+        }
     }
 
     return victim_ppn;
 }
+
 
 
 
@@ -162,8 +164,6 @@ int main(int argc, char *argv[]) {
     while (fscanf(fp, "%s %d", address_str, &op) == 2) {
         unsigned int address = (unsigned int)strtol(address_str, NULL, 16);
         int vpn = get_vpn(address);
-
-        access_count++;
 
         access_count++;
         if (op == 0) num_reads++;
