@@ -1,13 +1,9 @@
-// vm.c
-// compile with:
-// gcc –Wall –o vmem –std=c99 vm.c -lm
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
-#define MAX_PAGES 1024   // 2^10 possible physical pages (10-bit physical address)
+#define MAX_PAGES 16   // 2^10 possible physical pages (10-bit physical address)
 #define MAX_VPAGES 65536 // 2^16 virtual addresses
 
 // Structure representing a page table entry
@@ -42,7 +38,7 @@ int get_vpn(unsigned int address) {
 
 // Clear R bits every N accesses
 void maybe_clear_r_bits() {
-    if (access_count % clear_r_every == 0) {
+    if (access_count > 0 && access_count % clear_r_every == 0) {
         for (int i = 0; i < MAX_VPAGES; ++i) {
             if (page_table[i].valid) {
                 page_table[i].R = 0;
@@ -53,23 +49,25 @@ void maybe_clear_r_bits() {
 
 // NRU Replacement Policy (to be implemented fully later)
 int select_victim_page() {
-    int best_class = 4;     // Class ranges from 0 to 3
+    int best_class = 4;      // Valid class values: 0, 1, 2, 3
     int victim_ppn = -1;
 
-    // Loop through all physical memory slots
+    // Always scan from lowest physical address (ppn = 0)
     for (int ppn = 0; ppn < memory_used; ppn++) {
         int vpn = memory[ppn];
-        if (vpn == -1) continue; // skip unused
+        if (vpn == -1) continue; // skip unused frames
 
         int R = page_table[vpn].R;
         int M = page_table[vpn].M;
-        int class = 2 * R + M; // Maps (R,M) → 0~3
+        int class = 2 * R + M;
 
+        // Always prefer lower RM class first, and lower ppn in case of tie
         if (class < best_class) {
             best_class = class;
             victim_ppn = ppn;
 
-            if (best_class == 0) break; // can't get better than class 0
+            // Class 0 is the best possible, exit early
+            if (class == 0) break;
         }
     }
 
@@ -77,28 +75,30 @@ int select_victim_page() {
 }
 
 
+
 // Load a page into physical memory
 void handle_page_fault(int vpn, int is_write) {
     num_faults++;
 
-    // If physical memory has space
+    // If space is available in physical memory
     if (memory_used < MAX_PAGES) {
         page_table[vpn].valid = 1;
         page_table[vpn].ppn = memory_used;
         page_table[vpn].R = 1;
         page_table[vpn].M = is_write;
         page_table[vpn].vpn = vpn;
+
         memory[memory_used] = vpn;
         memory_used++;
     } else {
-        // Need to evict using NRU
+        // Select a victim using NRU
         int victim_ppn = select_victim_page();
         int victim_vpn = memory[victim_ppn];
 
-        // Invalidate the old page
+        // Invalidate victim's page table entry
         page_table[victim_vpn].valid = 0;
 
-        // Replace it with the new one
+        // Replace with new page
         page_table[vpn].valid = 1;
         page_table[vpn].ppn = victim_ppn;
         page_table[vpn].R = 1;
@@ -108,6 +108,7 @@ void handle_page_fault(int vpn, int is_write) {
         memory[victim_ppn] = vpn;
     }
 }
+
 
 // Main function
 int main(int argc, char *argv[]) {
