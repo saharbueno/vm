@@ -3,6 +3,7 @@
 #include <string.h>
 #include <math.h>
 
+
 #define MAX_PAGES 16   // 2^10 possible physical pages (10-bit physical address)
 #define MAX_VPAGES 65536 // 2^16 virtual addresses
 
@@ -49,30 +50,33 @@ void maybe_clear_r_bits() {
 
 // NRU Replacement Policy (to be implemented fully later)
 int select_victim_page() {
-    int best_class = 4;      // Valid class values: 0, 1, 2, 3
+    int best_class = 4;
     int victim_ppn = -1;
 
-    // Always scan from lowest physical address (ppn = 0)
     for (int ppn = 0; ppn < memory_used; ppn++) {
         int vpn = memory[ppn];
-        if (vpn == -1) continue; // skip unused frames
+        if (vpn == -1) continue;
 
         int R = page_table[vpn].R;
         int M = page_table[vpn].M;
         int class = 2 * R + M;
 
-        // Always prefer lower RM class first, and lower ppn in case of tie
-        if (class < best_class) {
+        if (class < best_class || (class == best_class && (victim_ppn == -1 || ppn < victim_ppn))) {
             best_class = class;
             victim_ppn = ppn;
-
-            // Class 0 is the best possible, exit early
-            if (class == 0) break;
         }
+
+        if (best_class == 0)
+            break; // can't do better than class 0
     }
 
     return victim_ppn;
 }
+
+
+
+
+
 
 
 
@@ -96,7 +100,12 @@ void handle_page_fault(int vpn, int is_write) {
         int victim_vpn = memory[victim_ppn];
 
         // Invalidate victim's page table entry
+        // Fully invalidate the victim's page table entry
         page_table[victim_vpn].valid = 0;
+        page_table[victim_vpn].R = 0;
+        page_table[victim_vpn].M = 0;
+        page_table[victim_vpn].ppn = -1;
+
 
         // Replace with new page
         page_table[vpn].valid = 1;
@@ -156,18 +165,19 @@ int main(int argc, char *argv[]) {
 
         access_count++;
 
+        access_count++;
         if (op == 0) num_reads++;
         else num_writes++;
-
-        maybe_clear_r_bits();
 
         if (!page_table[vpn].valid) {
             handle_page_fault(vpn, op);
         } else {
-            // Page is already in memory
             page_table[vpn].R = 1;
             if (op == 1) page_table[vpn].M = 1;
         }
+
+        maybe_clear_r_bits();  // 👈 now runs *after* updating R
+
     }
 
     fclose(fp);
