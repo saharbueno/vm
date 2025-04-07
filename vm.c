@@ -4,10 +4,9 @@
 #include <string.h>
 #include <math.h>
 
-// max number of physical pages
-#define MAXPAGES 16
 // total number of virtual pages
 #define MAXVPAGES 65536
+#define PHYSICAL_MEM_SIZE 512 // in bytes
 
 // stats
 int reads = 0;
@@ -19,9 +18,10 @@ int total_accesses = 0;
 int pg_size;
 int r_clear_interval;
 int offset_bits;
+int max_frames;
 
 // memory and usage tracking
-int physical_mem[MAXPAGES];
+int physical_mem[MAXVPAGES]; // large enough statically
 int used_pages = 0;
 
 // page table entry
@@ -76,7 +76,7 @@ int nru_select() {
 void page_fault(int vpn, int write) {
     faults++;
 
-    if (used_pages < MAXPAGES) {
+    if (used_pages < max_frames) {
         table[vpn].valid = 1;
         table[vpn].ppn = used_pages;
         table[vpn].ref = 1;
@@ -106,14 +106,14 @@ void page_fault(int vpn, int write) {
 
 // initialize memory
 void initialize_memory() {
-    for (int i = 0; i < MAXPAGES; i++) {
+    for (int i = 0; i < max_frames; i++) {
         physical_mem[i] = -1;
     }
 }
 
 // print memory contents
 void display_memory() {
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < max_frames; i++) {
         if (i < used_pages && physical_mem[i] != -1)
             printf("mem[%d]: %x\n", i, physical_mem[i]);
         else
@@ -124,6 +124,7 @@ void display_memory() {
 // simulate memory accesses
 void simulate_accesses(FILE *file) {
     offset_bits = (int)(log2(pg_size));
+    max_frames = PHYSICAL_MEM_SIZE / pg_size;
     initialize_memory();
 
     char hex_addr[10];
