@@ -1,200 +1,173 @@
+// imports
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
+// max number of physical pages
+#define MAXPAGES 16
+// total number of virtual pages
+#define MAXVPAGES 65536
 
-#define MAX_PAGES 16   // 2^10 possible physical pages (10-bit physical address)
-#define MAX_VPAGES 65536 // 2^16 virtual addresses
+// stats
+int reads = 0;
+int writes = 0;
+int faults = 0;
+int total_accesses = 0;
 
-// Structure representing a page table entry
-typedef struct {
-    int valid;   // 1 if present in physical memory
-    int vpn;     // virtual page number
-    int ppn;     // physical page number (index in memory)
-    int R;       // referenced bit
-    int M;       // modified bit (write)
-} PageTableEntry;
-
-// Global arrays to simulate memory and the page table
-PageTableEntry page_table[MAX_VPAGES];
-int memory[MAX_PAGES];    // physical memory holding VPNs
-int memory_used = 0;      // current number of frames used
-
-// Statistics
-int num_reads = 0;
-int num_writes = 0;
-int num_faults = 0;
-int access_count = 0;
-
-// Configurable variables
-int page_size;
-int clear_r_every;        // how often to clear R bits
+// page size and tracking for R-bit clears
+int pg_size;
+int r_clear_interval;
 int offset_bits;
 
-// Helper to extract VPN from virtual address
-int get_vpn(unsigned int address) {
-    return address >> offset_bits; // remove offset bits
+// memory and usage tracking
+int physical_mem[MAXPAGES];
+int used_pages = 0;
+
+// page table entry
+typedef struct {
+    int valid;
+    int vpn;
+    int ppn;
+    int ref;
+    int mod;
+} PTE;
+PTE table[MAXVPAGES];
+
+// extract vpn from address
+int extract_vpn(unsigned int addr) {
+    return addr >> offset_bits;
 }
 
-// Clear R bits every N accesses
-void maybe_clear_r_bits() {
-    if (access_count > 0 && access_count % clear_r_every == 0) {
-        for (int i = 0; i < MAX_VPAGES; ++i) {
-            if (page_table[i].valid) {
-                page_table[i].R = 0;
+// clear referenced bits if needed
+void clear_referenced_bits() {
+    if (total_accesses > 0 && total_accesses % r_clear_interval == 0) {
+        for (int i = 0; i < MAXVPAGES; i++) {
+            if (table[i].valid) {
+                table[i].ref = 0;
             }
         }
     }
 }
 
-// NRU Replacement Policy (to be implemented fully later)
-int select_victim_page() {
-    int best_class = 4;
-    int victim_ppn = -1;
+// select victim using NRU
+int nru_select() {
+    int min_class = 4;
+    int victim = -1;
 
-    for (int ppn = 0; ppn < memory_used; ++ppn) {
-        int vpn = memory[ppn];
+    for (int i = 0; i < used_pages; i++) {
+        int vpn = physical_mem[i];
         if (vpn == -1) continue;
 
-        int R = page_table[vpn].R;
-        int M = page_table[vpn].M;
-        int class = 2 * R + M;
+        int r = table[vpn].ref;
+        int m = table[vpn].mod;
+        int class = 2 * r + m;
 
-        if (class < best_class) {
-            best_class = class;
-            victim_ppn = ppn;
-
-            // Only break if this is the absolute best case
-            if (best_class == 0)
-                break;
+        if (class < min_class) {
+            min_class = class;
+            victim = i;
+            if (min_class == 0) break;
         }
     }
-
-    return victim_ppn;
+    return victim;
 }
 
+// handle page fault
+void page_fault(int vpn, int write) {
+    faults++;
 
+    if (used_pages < MAXPAGES) {
+        table[vpn].valid = 1;
+        table[vpn].ppn = used_pages;
+        table[vpn].ref = 1;
+        table[vpn].mod = write;
+        table[vpn].vpn = vpn;
 
-
-
-
-
-
-
-// Load a page into physical memory
-void handle_page_fault(int vpn, int is_write) {
-    num_faults++;
-
-    // If space is available in physical memory
-    if (memory_used < MAX_PAGES) {
-        page_table[vpn].valid = 1;
-        page_table[vpn].ppn = memory_used;
-        page_table[vpn].R = 1;
-        page_table[vpn].M = is_write;
-        page_table[vpn].vpn = vpn;
-
-        memory[memory_used] = vpn;
-        memory_used++;
+        physical_mem[used_pages] = vpn;
+        used_pages++;
     } else {
-        // Select a victim using NRU
-        int victim_ppn = select_victim_page();
-        int victim_vpn = memory[victim_ppn];
+        int replace_index = nru_select();
+        int evict_vpn = physical_mem[replace_index];
 
-        // Invalidate victim's page table entry
-        // Fully invalidate the victim's page table entry
-        page_table[victim_vpn].valid = 0;
-        page_table[victim_vpn].R = 0;
-        page_table[victim_vpn].M = 0;
-        page_table[victim_vpn].ppn = -1;
+        table[evict_vpn].valid = 0;
+        table[evict_vpn].ref = 0;
+        table[evict_vpn].mod = 0;
+        table[evict_vpn].ppn = -1;
 
+        table[vpn].valid = 1;
+        table[vpn].ppn = replace_index;
+        table[vpn].ref = 1;
+        table[vpn].mod = write;
+        table[vpn].vpn = vpn;
 
-        // Replace with new page
-        page_table[vpn].valid = 1;
-        page_table[vpn].ppn = victim_ppn;
-        page_table[vpn].R = 1;
-        page_table[vpn].M = is_write;
-        page_table[vpn].vpn = vpn;
-
-        memory[victim_ppn] = vpn;
+        physical_mem[replace_index] = vpn;
     }
 }
 
-
-// Main function
-int main(int argc, char *argv[]) {
-    if (argc != 4) {
-        printf("Usage: %s inputfile pagesize clear_r_every_n\n", argv[0]);
-        return 1;
+// initialize memory
+void initialize_memory() {
+    for (int i = 0; i < MAXPAGES; i++) {
+        physical_mem[i] = -1;
     }
+}
 
-    // Parse command line arguments
-    char *input_file = argv[1];
-    page_size = atoi(argv[2]);
-    clear_r_every = atoi(argv[3]);
-
-    if (page_size != 32 && page_size != 64 && page_size != 128) {
-        printf("Error: Page size must be 32, 64, or 128.\n");
-        return 1;
-    }
-
-    if (clear_r_every <= 0) {
-        printf("Error: clear_r_every must be > 0.\n");
-        return 1;
-    }
-
-    // Compute number of bits to shift for VPN
-    offset_bits = (int)(log2(page_size));
-
-    // Initialize memory
-    for (int i = 0; i < MAX_PAGES; i++) {
-        memory[i] = -1; // -1 indicates unused frame
-    }
-
-    // Open input file
-    FILE *fp = fopen(input_file, "r");
-    if (!fp) {
-        perror("Error opening file");
-        return 1;
-    }
-
-    // Read address and operation from file
-    char address_str[10];
-    int op; // 0 = read, 1 = write
-    while (fscanf(fp, "%s %d", address_str, &op) == 2) {
-        unsigned int address = (unsigned int)strtol(address_str, NULL, 16);
-        int vpn = get_vpn(address);
-
-        access_count++;
-        if (op == 0) num_reads++;
-        else num_writes++;
-
-        if (!page_table[vpn].valid) {
-            handle_page_fault(vpn, op);
-        } else {
-            page_table[vpn].R = 1;
-            if (op == 1) page_table[vpn].M = 1;
-        }
-
-        maybe_clear_r_bits();  // 👈 now runs *after* updating R
-
-    }
-
-    fclose(fp);
-
-    // Print statistics
-    printf("num reads = %d\n", num_reads);
-    printf("num writes = %d\n", num_writes);
-    printf("percentage of page faults %.2f\n",
-           (num_reads + num_writes) == 0 ? 0.0 : ((float)num_faults / (num_reads + num_writes)));
-
-    // Print memory contents
+// print memory contents
+void display_memory() {
     for (int i = 0; i < 16; i++) {
-        if (i < memory_used && memory[i] != -1)
-            printf("mem[%d]: %x\n", i, memory[i]);
+        if (i < used_pages && physical_mem[i] != -1)
+            printf("mem[%d]: %x\n", i, physical_mem[i]);
         else
             printf("mem[%d]: ffffffff\n", i);
     }
+}
 
+// simulate memory accesses
+void simulate_accesses(FILE *file) {
+    offset_bits = (int)(log2(pg_size));
+    initialize_memory();
+
+    char hex_addr[10];
+    int action;
+
+    while (fscanf(file, "%s %d", hex_addr, &action) == 2) {
+        unsigned int addr = (unsigned int)strtol(hex_addr, NULL, 16);
+        int vpn = extract_vpn(addr);
+
+        total_accesses++;
+        if (action == 0) reads++;
+        else writes++;
+
+        if (!table[vpn].valid) {
+            page_fault(vpn, action);
+        } else {
+            table[vpn].ref = 1;
+            if (action == 1) table[vpn].mod = 1;
+        }
+
+        clear_referenced_bits();
+    }
+}
+
+// main
+int main(int argc, char *argv[]) {
+    char *filename = argv[1];
+    pg_size = atoi(argv[2]);
+    r_clear_interval = atoi(argv[3]);
+
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("file open error");
+        return 1;
+    }
+
+    simulate_accesses(file);
+    fclose(file);
+
+    printf("num reads = %d\n", reads);
+    printf("num writes = %d\n", writes);
+    printf("percentage of page faults %.2f\n",
+        (reads + writes) == 0 ? 0.0 : ((float)faults / (reads + writes)));
+
+    display_memory();
     return 0;
 }
