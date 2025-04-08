@@ -115,7 +115,15 @@ void handle_page_fault(int vpn, int is_write) {
 
 // print memory contents
 void print_memory() {
-    for (int i = 0; i < 16; i++) {
+    int numprint;
+    if (page_size == 32) {
+        numprint = 32;
+    } else if (page_size == 64) {
+        numprint = 16;
+    } else {
+        numprint = 8;
+    }
+    for (int i = 0; i < numprint; i++) {
         if (i < mem_used && mem[i] != -1)
             printf("mem[%d]: %x\n", i, mem[i]);
         else
