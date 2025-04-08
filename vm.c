@@ -4,9 +4,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+// 2^10 possible physical pages
+#define MAXPAGES 16
 // 2^16 virtual addresses
 #define MAXVPAGES 65536
-#define PHYSICAL_MEMORY_SIZE 512 // total memory in bytes
 
 // stats
 int num_reads = 0;
@@ -18,10 +19,9 @@ int access_count = 0;
 int page_size;
 int clear_r_every; // how often to clear R bits
 int offset_bits;
-int max_frames;
 
 // physical memory + memory used
-int mem[MAXVPAGES]; // large enough to handle any frame count
+int mem[MAXPAGES];
 int mem_used = 0;
 
 // page table entry object
@@ -62,6 +62,7 @@ int get_victim() {
 
 // get vpn from virtual address helper function
 int get_vpn(unsigned int address) {
+    // remove offset bits
     return address >> offset_bits;
 }
 
@@ -80,7 +81,8 @@ void maybe_clear_r_bits() {
 void handle_page_fault(int vpn, int is_write) {
     num_faults++;
 
-    if (mem_used < max_frames) {
+    // if space is available in physical mem
+    if (mem_used < MAXPAGES) {
         pt[vpn].valid = 1;
         pt[vpn].ppn = mem_used;
         pt[vpn].R = 1;
@@ -90,14 +92,17 @@ void handle_page_fault(int vpn, int is_write) {
         mem[mem_used] = vpn;
         mem_used++;
     } else {
+        // select a victim using nru
         int victim_ppn = get_victim();
         int victim_vpn = mem[victim_ppn];
 
+        // invalidate victim's page table entry
         pt[victim_vpn].valid = 0;
         pt[victim_vpn].R = 0;
         pt[victim_vpn].M = 0;
         pt[victim_vpn].ppn = -1;
 
+        // replace with new page
         pt[vpn].valid = 1;
         pt[vpn].ppn = victim_ppn;
         pt[vpn].R = 1;
@@ -110,7 +115,7 @@ void handle_page_fault(int vpn, int is_write) {
 
 // print memory contents
 void print_memory() {
-    for (int i = 0; i < max_frames; i++) {
+    for (int i = 0; i < 16; i++) {
         if (i < mem_used && mem[i] != -1)
             printf("mem[%d]: %x\n", i, mem[i]);
         else
@@ -120,14 +125,23 @@ void print_memory() {
 
 // process the memory accesses from file
 void process_memory_accesses(FILE *fp) {
-    offset_bits = (int)(log2(page_size));
-    max_frames = PHYSICAL_MEMORY_SIZE / page_size;
+    // compute number of bits to shift for vpn
+    if (page_size == 32){
+        offset_bits = 5;
+    } else if (page_size == 64) {
+        offset_bits = 6;
+    } else if (page_size == 128) {
+        offset_bits = 7;
+    }
 
-    for (int i = 0; i < max_frames; i++) {
+    // initialize mem
+    for (int i = 0; i < MAXPAGES; i++) {
         mem[i] = -1;
     }
 
+    // read address + operation from file
     char address_str[10];
+    // 0 = read, 1 = write
     int op;
     while (fscanf(fp, "%s %d", address_str, &op) == 2) {
         unsigned int address = (unsigned int)strtol(address_str, NULL, 16);
@@ -150,24 +164,33 @@ void process_memory_accesses(FILE *fp) {
 
 // main function
 int main(int argc, char *argv[]) {
+    // parse command line arguments
     char *input_file = argv[1];
     page_size = atoi(argv[2]);
     clear_r_every = atoi(argv[3]);
 
+    // open input file
     FILE *fp = fopen(input_file, "r");
     if (!fp) {
         perror("Error opening file");
         return 1;
     }
 
+    // process memory access logic
     process_memory_accesses(fp);
+
+    // close file
     fclose(fp);
 
+    // print stats
     printf("num reads = %d\n", num_reads);
     printf("num writes = %d\n", num_writes);
     printf("percentage of page faults %.2f\n",
            (num_reads + num_writes) == 0 ? 0.0 : ((float)num_faults / (num_reads + num_writes)));
 
+    // print mem contents
     print_memory();
+
+    // end
     return 0;
 }
